@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800&family=Poppins:wght@500;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: #0f172a;
+    font-family: 'Inter', sans-serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: 'Poppins', sans-serif;
+  }
+
+  .grain-overlay {
+    background-image: radial-gradient(rgba(148, 163, 184, 0.12) 0.8px, transparent 0.8px);
+    background-size: 4px 4px;
+    opacity: 0.2;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 220ms ease-out;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
