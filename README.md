@@ -2,6 +2,8 @@
 
 Customer-facing restaurant ordering frontend built with React + Vite.
 
+Live user web URL: https://scan2-order.vercel.app/
+
 ## Local Development
 
 1. Install dependencies:
@@ -55,6 +57,13 @@ This repo includes `vercel.json` with SPA rewrite support.
 1. Build command: `npm run build`
 2. Publish directory: `dist`
 3. Set `VITE_API_BASE_URL` in Site settings -> Environment variables.
+
+## Owner App QR Link Target
+
+Owner app QR generation should point to the live customer web URL.
+
+- Default in owner app config: `https://scan2-order.vercel.app/`
+- Optional env override in owner app: `EXPO_PUBLIC_CUSTOMER_WEB_URL`
 
 ## GitHub Push (first-time from local folder)
 

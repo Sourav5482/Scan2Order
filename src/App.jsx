@@ -5,7 +5,7 @@ import MobileOrdersPanel from './components/MobileOrdersPanel'
 import MenuItemCard from './components/MenuItemCard'
 import OrderStatusPage from './components/OrderStatusPage'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://scan2orderbackend.onrender.com'
 const VALID_AVAILABILITY = new Set(['all', 'available', 'unavailable'])
 const AVAILABILITY_OPTIONS = [
   { value: 'all', label: 'All' },
