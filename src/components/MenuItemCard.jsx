@@ -1,59 +1,59 @@
 function MenuItemCard({ item, cartQty, onAddToCart, onDecreaseQty }) {
   return (
-    <article className="group overflow-hidden rounded-3xl border border-slate-700/80 bg-gradient-to-b from-slate-800/80 to-slate-900/80 shadow-lg shadow-black/20 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-brand-500/60 hover:shadow-glow">
-      <div className="relative h-44 overflow-hidden sm:h-48">
+    <article className="group overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-soft transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl">
+      <div className="relative h-40 overflow-hidden sm:h-44">
         <img
           src={item.image}
           alt={item.name}
           className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
           loading="lazy"
         />
-        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-slate-950/80 to-transparent" />
+        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-slate-900/40 to-transparent" />
         {!item.isAvailable && (
-          <span className="absolute left-3 top-3 rounded-full bg-rose-500/90 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
+          <span className="absolute left-3 top-3 rounded-full bg-rose-500 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
             Out of Stock
           </span>
         )}
       </div>
 
-      <div className="space-y-4 p-4 sm:p-5">
+      <div className="space-y-3 p-3.5 sm:p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-lg font-bold leading-tight text-slate-100">{item.name}</h3>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="rounded-full border border-sky-400/40 bg-sky-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-200">
+            <h3 className="text-base font-bold leading-tight text-[#282C3F]">{item.name}</h3>
+            <div className="mt-1.5 flex items-center gap-2">
+              <span className="rounded-full border border-brand-100 bg-brand-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-[#FC8019]">
                 {item.category || 'Uncategorized'}
               </span>
-              <p className="text-xs uppercase tracking-wide text-slate-400">Freshly prepared</p>
+              <p className="text-[11px] text-[#686B78]">Freshly prepared</p>
             </div>
           </div>
-          <p className="rounded-lg bg-brand-500/15 px-2 py-1 text-lg font-extrabold text-brand-400">
+          <p className="rounded-lg bg-brand-50 px-2 py-1 text-base font-bold text-[#FC8019]">
             Rs {item.price}
           </p>
         </div>
 
         {item.isAvailable ? (
           cartQty > 0 ? (
-            <div className="flex items-center justify-between rounded-xl border border-brand-500/50 bg-brand-500/10 px-3 py-2.5">
-              <span className="text-xs font-semibold uppercase tracking-wide text-brand-300">In Cart</span>
+            <div className="flex items-center justify-between rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5">
+              <span className="text-[11px] font-semibold text-[#FC8019]">In Cart</span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => onDecreaseQty(item.id)}
-                  className="h-8 w-8 rounded-lg border border-brand-400/50 text-base font-bold text-brand-200 transition-all hover:bg-brand-500/20 active:scale-[0.96]"
+                  className="h-8 w-8 rounded-lg border border-brand-200 bg-white text-base font-bold text-[#FC8019] transition-all hover:bg-brand-50 active:scale-[0.96]"
                   aria-label={`Decrease quantity of ${item.name}`}
                 >
                   -
                 </button>
 
-                <span className="min-w-6 text-center text-sm font-bold text-slate-100">
+                <span className="min-w-6 text-center text-sm font-bold text-[#282C3F]">
                   {cartQty}
                 </span>
 
                 <button
                   type="button"
                   onClick={() => onAddToCart(item)}
-                  className="h-8 w-8 rounded-lg border border-brand-400/50 text-base font-bold text-brand-200 transition-all hover:bg-brand-500/20 active:scale-[0.96]"
+                  className="h-8 w-8 rounded-lg border border-brand-200 bg-white text-base font-bold text-[#FC8019] transition-all hover:bg-brand-50 active:scale-[0.96]"
                   aria-label={`Increase quantity of ${item.name}`}
                 >
                   +
@@ -64,7 +64,7 @@ function MenuItemCard({ item, cartQty, onAddToCart, onDecreaseQty }) {
             <button
               type="button"
               onClick={() => onAddToCart(item)}
-              className="w-full rounded-xl bg-brand-500 px-4 py-3 text-sm font-bold uppercase tracking-wide text-white transition-all duration-200 hover:bg-brand-600 active:scale-[0.99]"
+              className="w-full rounded-xl bg-[#FC8019] px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:bg-brand-600 active:scale-[0.99]"
             >
               Add
             </button>
@@ -73,7 +73,7 @@ function MenuItemCard({ item, cartQty, onAddToCart, onDecreaseQty }) {
           <button
             type="button"
             disabled
-            className="w-full rounded-xl bg-slate-600 px-4 py-3 text-sm font-bold uppercase tracking-wide text-slate-300 disabled:cursor-not-allowed"
+            className="w-full rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-500 disabled:cursor-not-allowed"
           >
             Unavailable
           </button>

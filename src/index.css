@@ -6,7 +6,7 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   html,
@@ -17,7 +17,8 @@
 
   body {
     margin: 0;
-    background: #0f172a;
+    background: #fffdf8;
+    color: #282c3f;
     font-family: 'Inter', sans-serif;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -28,6 +29,15 @@
 @layer utilities {
   .font-display {
     font-family: 'Poppins', sans-serif;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 
   .grain-overlay {

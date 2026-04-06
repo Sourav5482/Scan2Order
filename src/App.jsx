@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import CartBar from './components/CartBar'
-import MobileBottomNav from './components/MobileBottomNav'
 import MobileOrdersPanel from './components/MobileOrdersPanel'
 import MenuItemCard from './components/MenuItemCard'
 import OrderStatusPage from './components/OrderStatusPage'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://scan2orderbackend.onrender.com'
+const POPULAR_ITEMS_STORAGE_PREFIX = 'scan2order-popular-items'
+const ACTIVE_ORDER_STORAGE_PREFIX = 'scan2order-active-order'
 const VALID_AVAILABILITY = new Set(['all', 'available', 'unavailable'])
 const AVAILABILITY_OPTIONS = [
   { value: 'all', label: 'All' },
@@ -13,17 +14,119 @@ const AVAILABILITY_OPTIONS = [
   { value: 'unavailable', label: 'Out of Stock' },
 ]
 
+const getPopularItemsStorageKey = (restaurantId) => `${POPULAR_ITEMS_STORAGE_PREFIX}:${restaurantId}`
+const getActiveOrderStorageKey = (restaurantId, table) => `${ACTIVE_ORDER_STORAGE_PREFIX}:${restaurantId}:${table}`
+
+const isOrderCompleted = (orderDetails) => {
+  const completedValue = orderDetails?.completed
+
+  if (completedValue === true || completedValue === 1) {
+    return true
+  }
+
+  if (typeof completedValue === 'string') {
+    const normalizedCompleted = completedValue.trim().toLowerCase()
+    return normalizedCompleted === 'true' || normalizedCompleted === '1' || normalizedCompleted === 'yes'
+  }
+
+  return false
+}
+
+const readPopularItemCounts = (restaurantId) => {
+  if (!restaurantId || typeof window === 'undefined') {
+    return {}
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getPopularItemsStorageKey(restaurantId))
+
+    if (!raw) {
+      return {}
+    }
+
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const writePopularItemCounts = (restaurantId, counts) => {
+  if (!restaurantId || typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(getPopularItemsStorageKey(restaurantId), JSON.stringify(counts))
+  } catch {
+    // Ignore storage failures and continue with runtime state.
+  }
+}
+
+const readActiveOrder = (restaurantId, table) => {
+  if (!restaurantId?.trim() || !table || typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getActiveOrderStorageKey(restaurantId, table))
+
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw)
+
+    if (!parsed || typeof parsed !== 'object' || !String(parsed.orderId || '').trim()) {
+      return null
+    }
+
+    return {
+      orderId: String(parsed.orderId).trim(),
+      total: Number(parsed.total) || 0,
+      restaurantId: String(parsed.restaurantId || restaurantId),
+      table: String(parsed.table || table),
+    }
+  } catch {
+    return null
+  }
+}
+
+const writeActiveOrder = (order) => {
+  if (!order?.restaurantId || !order?.table || !order?.orderId || typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(
+      getActiveOrderStorageKey(order.restaurantId, order.table),
+      JSON.stringify(order),
+    )
+  } catch {
+    // Ignore storage failures and continue with runtime state.
+  }
+}
+
+const clearActiveOrder = (restaurantId, table) => {
+  if (!restaurantId?.trim() || !table || typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.removeItem(getActiveOrderStorageKey(restaurantId, table))
+  } catch {
+    // Ignore storage failures and continue with runtime state.
+  }
+}
+
 function App() {
-  const initialParams = useMemo(
-    () => new URLSearchParams(window.location.search),
-    [],
-  )
-  const restaurantId = initialParams.get('restaurant')
-  const table = initialParams.get('table')
-  const orderId = initialParams.get('orderId')
-  const initialSearchQuery = initialParams.get('q') || ''
-  const initialCategory = initialParams.get('category') || 'all'
-  const initialAvailability = initialParams.get('availability') || 'all'
+  const currentParams = new URLSearchParams(window.location.search)
+  const restaurantId = (currentParams.get('restaurant') || '').trim()
+  const table = (currentParams.get('table') || '').trim()
+  const orderId = (currentParams.get('orderId') || '').trim()
+  const initialSearchQuery = currentParams.get('q') || ''
+  const initialCategory = currentParams.get('category') || 'all'
+  const initialAvailability = currentParams.get('availability') || 'all'
 
   const [cartItems, setCartItems] = useState([])
   const [activeTab, setActiveTab] = useState('menu')
@@ -39,19 +142,21 @@ function App() {
   const [isPlacingOrder, setIsPlacingOrder] = useState(false)
   const [lastPlacedOrder, setLastPlacedOrder] = useState(null)
   const [orderError, setOrderError] = useState('')
-  const touchStartRef = useRef({ x: 0, y: 0 })
-  const lastCartActionRef = useRef({})
+  const [orderSyncMeta, setOrderSyncMeta] = useState(null)
+  const featuredScrollRef = useRef(null)
 
   const shouldProcessCartAction = (itemId, actionType, delay = 180) => {
     const actionKey = `${actionType}-${itemId}`
     const now = Date.now()
-    const lastActionAt = lastCartActionRef.current[actionKey] || 0
+    const cache = shouldProcessCartAction.cache || {}
+    const lastActionAt = cache[actionKey] || 0
 
     if (now - lastActionAt < delay) {
       return false
     }
 
-    lastCartActionRef.current[actionKey] = now
+    cache[actionKey] = now
+    shouldProcessCartAction.cache = cache
     return true
   }
 
@@ -98,9 +203,27 @@ function App() {
   }, [restaurantId])
 
   useEffect(() => {
+    if (orderId?.trim()) {
+      return
+    }
+
+    const storedOrder = readActiveOrder(restaurantId, table)
+
+    if (storedOrder) {
+      setLastPlacedOrder(storedOrder)
+    }
+  }, [restaurantId, table, orderId])
+
+  useEffect(() => {
+    setCartItems([])
+    setOrderError('')
+    setOrderSyncMeta(null)
+  }, [restaurantId, table])
+
+  useEffect(() => {
     const debounceTimer = setTimeout(() => {
       setSearchQuery(searchInput)
-    }, 300)
+    }, 240)
 
     return () => clearTimeout(debounceTimer)
   }, [searchInput])
@@ -212,7 +335,174 @@ function App() {
     })
   }, [menuItems, searchQuery, selectedCategory, selectedAvailability])
 
+  const popularInsights = (() => {
+    const popularCounts = readPopularItemCounts(restaurantId)
+    const rankedItems = Object.entries(popularCounts)
+      .map(([itemId, count]) => {
+        const menuItem = menuItems.find((item) => String(item.id) === String(itemId))
+
+        if (!menuItem) {
+          return null
+        }
+
+        return {
+          item: menuItem,
+          count: Number(count) || 0,
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.count - a.count)
+
+    if (rankedItems.length > 0) {
+      const topRanked = rankedItems.slice(0, 5)
+
+      return {
+        topItems: topRanked.map((entry) => entry.item),
+        countById: Object.fromEntries(topRanked.map((entry) => [String(entry.item.id), entry.count])),
+      }
+    }
+
+    return {
+      topItems: menuItems.slice(0, 5),
+      countById: {},
+    }
+  })()
+
+  const heroDish = popularInsights.topItems[0] || menuItems[0] || null
+
+  useEffect(() => {
+    const scrollNode = featuredScrollRef.current
+
+    if (!scrollNode || popularInsights.topItems.length <= 1) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      const reachedEnd = scrollNode.scrollLeft + scrollNode.clientWidth >= scrollNode.scrollWidth - 8
+
+      if (reachedEnd) {
+        scrollNode.scrollTo({ left: 0, behavior: 'smooth' })
+        return
+      }
+
+      scrollNode.scrollBy({ left: 228, behavior: 'smooth' })
+    }, 2300)
+
+    return () => window.clearInterval(intervalId)
+  }, [popularInsights.topItems.length])
+
   const isSearchDebouncing = searchInput !== searchQuery
+
+  useEffect(() => {
+    if (orderId?.trim() || !restaurantId?.trim() || !table || !lastPlacedOrder?.orderId) {
+      return
+    }
+
+    let isDisposed = false
+
+    const syncOrderCompletion = async () => {
+      try {
+        const response = await fetch(`${BASE_URL}/order/details/${lastPlacedOrder.orderId}?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: {
+            Pragma: 'no-cache',
+            'Cache-Control': 'no-cache',
+          },
+        })
+        const result = await response.json()
+
+        if (!response.ok || result.success === false || !result.data) {
+          if (!isDisposed) {
+            setOrderSyncMeta({
+              source: 'poll',
+              ok: false,
+              message: result?.message || `HTTP ${response.status}`,
+            })
+          }
+          return
+        }
+
+        if (!isDisposed) {
+          setOrderSyncMeta({
+            source: 'poll',
+            ok: true,
+            status: result.data.status,
+            completed: result.data.completed,
+          })
+        }
+
+        if (isOrderCompleted(result.data)) {
+          if (!isDisposed) {
+            setLastPlacedOrder(null)
+            setOrderSyncMeta({
+              source: 'poll',
+              ok: true,
+              status: result.data.status,
+              completed: result.data.completed,
+              message: 'Order completed, clearing success banner.',
+            })
+          }
+
+          clearActiveOrder(
+            lastPlacedOrder.restaurantId || restaurantId,
+            lastPlacedOrder.table || table,
+          )
+          return
+        }
+
+        if (!isDisposed) {
+          setLastPlacedOrder((previous) => {
+            if (!previous) {
+              return previous
+            }
+
+            return {
+              ...previous,
+              total: Number(result.data.total) || previous.total,
+            }
+          })
+        }
+      } catch (pollError) {
+        if (!isDisposed) {
+          setOrderSyncMeta({
+            source: 'poll',
+            ok: false,
+            message: pollError?.message || 'Poll failed',
+          })
+        }
+        // Keep banner visible when polling fails.
+      }
+    }
+
+    syncOrderCompletion()
+    const pollTimer = window.setInterval(syncOrderCompletion, 5000)
+
+    return () => {
+      isDisposed = true
+      window.clearInterval(pollTimer)
+    }
+  }, [orderId, restaurantId, table, lastPlacedOrder?.orderId, lastPlacedOrder?.restaurantId, lastPlacedOrder?.table])
+
+  const recordOrderedItems = (orderedItems) => {
+    if (!restaurantId?.trim() || !Array.isArray(orderedItems) || orderedItems.length === 0) {
+      return
+    }
+
+    const popularCounts = readPopularItemCounts(restaurantId)
+
+    orderedItems.forEach((item) => {
+      const itemId = String(item?.id || '').trim()
+      const qty = Number(item?.qty || 0)
+
+      if (!itemId || !Number.isFinite(qty) || qty <= 0) {
+        return
+      }
+
+      popularCounts[itemId] = (Number(popularCounts[itemId]) || 0) + qty
+    })
+
+    writePopularItemCounts(restaurantId, popularCounts)
+  }
 
   const handlePlaceOrder = async () => {
     if (cartItems.length === 0) {
@@ -261,10 +551,22 @@ function App() {
       }
 
       const confirmationId = result?.data?.orderId || result?.data?._id || ''
-      setLastPlacedOrder({
+      const persistedOrder = {
         orderId: confirmationId,
-        total: totalPrice,
+        total: Number(result?.data?.total) || totalPrice,
+        restaurantId,
+        table: String(table),
+      }
+
+      setLastPlacedOrder(persistedOrder)
+      setOrderSyncMeta({
+        source: 'place-order',
+        ok: true,
+        status: result?.data?.status,
+        completed: result?.data?.completed,
       })
+      writeActiveOrder(persistedOrder)
+      recordOrderedItems(cartItems)
       setCartItems([])
       setActiveTab('menu')
       console.log('[ORDER] Created:', result.data)
@@ -288,80 +590,147 @@ function App() {
     window.location.reload()
   }
 
-  const handleTouchStart = (event) => {
-    touchStartRef.current = {
-      x: event.changedTouches[0].clientX,
-      y: event.changedTouches[0].clientY,
-    }
-  }
-
-  const handleTouchEnd = (event) => {
-    const touchEndX = event.changedTouches[0].clientX
-    const touchEndY = event.changedTouches[0].clientY
-    const deltaX = touchEndX - touchStartRef.current.x
-    const deltaY = touchEndY - touchStartRef.current.y
-
-    // Switch tabs only for clear horizontal swipes to avoid fighting vertical scroll.
-    if (Math.abs(deltaX) < 55 || Math.abs(deltaX) < Math.abs(deltaY)) {
-      return
-    }
-
-    if (deltaX < 0) {
-      setActiveTab('orders')
-      return
-    }
-
-    setActiveTab('menu')
-  }
-
   if (orderId?.trim()) {
     return <OrderStatusPage orderId={orderId} baseUrl={BASE_URL} />
   }
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-slateDeep text-slate-100">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(249,115,22,0.2),transparent_35%),radial-gradient(circle_at_90%_15%,rgba(56,189,248,0.14),transparent_40%),linear-gradient(120deg,rgba(15,23,42,0.85),rgba(15,23,42,0.55))]" />
-      <div className="grain-overlay pointer-events-none absolute inset-0" />
-
-      <main className="relative mx-auto max-w-7xl px-4 pb-32 pt-6 sm:px-6 md:pb-72 md:pt-10 lg:px-8">
-        <header className="sticky top-2 z-30 mb-7 overflow-hidden rounded-3xl border border-slate-700/80 bg-slate-900/80 p-5 shadow-2xl shadow-black/30 backdrop-blur-xl sm:top-3 sm:p-6 md:mb-8 md:p-8">
-          <div className="pointer-events-none absolute -right-12 -top-12 h-36 w-36 rounded-full bg-brand-500/20 blur-3xl" />
-          <p className="mb-3 inline-flex rounded-full border border-brand-500/40 bg-brand-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-brand-100 sm:text-xs">
-            Live Table Ordering
-          </p>
-          <h1 className="font-display text-3xl font-extrabold leading-tight sm:text-4xl md:text-5xl">
-            {restaurantId ? `Restaurant ${restaurantId}` : 'Restaurant Menu'}
-          </h1>
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <p className="rounded-xl border border-slate-600/80 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 sm:text-base">
-              Table <span className="font-extrabold text-white">{table ?? 'N/A'}</span>
-            </p>
-            <p className="rounded-xl border border-slate-600/80 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 sm:text-base">
-              Items in cart <span className="font-extrabold text-brand-400">{totalItems}</span>
-            </p>
+    <div className="min-h-screen bg-[#ffffff] text-[#282C3F]">
+      <main className="mx-auto max-w-6xl px-4 pb-32 pt-3 sm:px-6 md:pb-40">
+        <header className="sticky top-0 z-30 -mx-4 border-b border-slate-200/90 bg-white/95 px-4 py-2.5 backdrop-blur sm:-mx-6 sm:px-6">
+          <div className="mx-auto flex max-w-6xl items-center justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#686B78]">Restaurant</p>
+              <h1 className="font-display text-lg font-bold text-[#282C3F] sm:text-xl">
+                {restaurantId?.trim() || 'Restaurant'}
+              </h1>
+            </div>
+            <div className="rounded-full border border-slate-200 bg-[#F8F8F8] px-3 py-1 text-[11px] font-semibold text-[#282C3F]">
+              Table {table ?? 'N/A'}
+            </div>
           </div>
         </header>
 
-        <section
-          className="touch-pan-y"
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
-        >
+        <section className="mt-3 space-y-3.5">
+          <div className="rounded-2xl border border-brand-100 bg-gradient-to-r from-brand-50 to-white p-3.5 shadow-soft">
+            <p className="text-xs font-semibold tracking-wide text-[#686B78]">Welcome</p>
+            <h2 className="mt-1 font-display text-[22px] font-bold leading-tight text-[#282C3F]">Order from your table in seconds</h2>
+            {heroDish && (
+              <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-2.5">
+                <img
+                  src={heroDish.image}
+                  alt={heroDish.name}
+                  className="h-14 w-14 rounded-lg object-cover"
+                />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#686B78]">Popular right now</p>
+                  <p className="text-[13px] font-bold text-[#282C3F]">{heroDish.name}</p>
+                  <p className="text-[12px] font-semibold text-[#FC8019]">Rs {heroDish.price}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="sticky top-[70px] z-20 rounded-2xl border border-slate-200 bg-white/95 p-2.5 shadow-soft backdrop-blur">
+            <div className="relative">
+              <input
+                type="text"
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                placeholder="Search menu"
+                className="h-10 w-full rounded-xl border border-slate-200 bg-[#F8F8F8] px-3.5 pr-10 text-[13px] text-[#282C3F] outline-none transition focus:border-[#FC8019]"
+              />
+              {searchInput ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchInput('')
+                    setSearchQuery('')
+                  }}
+                  className="absolute right-2 top-1/2 h-7 w-7 -translate-y-1/2 rounded-lg border border-slate-200 bg-white text-[11px] text-[#686B78]"
+                >
+                  x
+                </button>
+              ) : null}
+            </div>
+
+            <div className="no-scrollbar mt-2.5 flex gap-1.5 overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => setSelectedCategory('all')}
+                className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-[11px] font-medium transition ${
+                  selectedCategory === 'all'
+                    ? 'border-[#FC8019] bg-[#FC8019] text-white'
+                    : 'border-slate-200 bg-white text-[#686B78]'
+                }`}
+              >
+                All
+              </button>
+              {uniqueCategories.map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => setSelectedCategory(category)}
+                  className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-[11px] font-medium transition ${
+                    selectedCategory === category
+                      ? 'border-[#FC8019] bg-[#FC8019] text-white'
+                      : 'border-slate-200 bg-white text-[#686B78]'
+                  }`}
+                >
+                  {category}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {AVAILABILITY_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setSelectedAvailability(option.value)}
+                  className={`rounded-md border px-2.5 py-1 text-[10px] font-medium transition ${
+                    selectedAvailability === option.value
+                      ? 'border-[#FC8019] bg-brand-50 text-[#FC8019]'
+                      : 'border-slate-200 bg-white text-[#686B78]'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchInput('')
+                  setSearchQuery('')
+                  setSelectedCategory('all')
+                  setSelectedAvailability('all')
+                }}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-medium text-[#686B78]"
+              >
+                Reset
+              </button>
+
+              <span className="ml-auto text-[10px] text-[#686B78]">{isSearchDebouncing ? 'Searching...' : 'Synced'}</span>
+            </div>
+          </div>
+
           {lastPlacedOrder && (
-            <div className="mb-4 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-100 shadow-lg shadow-emerald-900/20">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-700">
               <p className="text-base font-bold">Order Placed Successfully 🎉</p>
-              <p className="mt-1 text-sm text-emerald-200">
-                Order ID: <span className="font-semibold">{lastPlacedOrder.orderId || 'N/A'}</span>
+              <p className="mt-1 text-sm">Order ID: <span className="font-semibold">{lastPlacedOrder.orderId || 'N/A'}</span></p>
+              <p className="mt-0.5 text-sm">Total: <span className="font-semibold">Rs {lastPlacedOrder.total}</span></p>
+              <p className="mt-1.5 text-[11px] text-emerald-700/85">
+                Live check: completed={String(orderSyncMeta?.completed)} status={String(orderSyncMeta?.status || 'N/A')}
               </p>
-              <p className="mt-0.5 text-sm text-emerald-200">
-                Total Amount: <span className="font-semibold">Rs {lastPlacedOrder.total}</span>
-              </p>
+              {!orderSyncMeta?.ok && orderSyncMeta?.message ? (
+                <p className="mt-1 text-[11px] text-rose-700">Sync issue: {orderSyncMeta.message}</p>
+              ) : null}
               {lastPlacedOrder.orderId && (
                 <button
                   type="button"
                   onClick={handleTrackOrder}
-                  className="mt-3 rounded-xl border border-emerald-300/40 bg-emerald-500/20 px-3 py-2 text-xs font-bold uppercase tracking-wide text-emerald-100 transition-all hover:bg-emerald-500/30"
+                  className="mt-3 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-bold uppercase tracking-wide text-emerald-700"
                 >
                   Track Order
                 </button>
@@ -370,153 +739,97 @@ function App() {
           )}
 
           {orderError && (
-            <div className="mb-4 rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
               {orderError}
             </div>
           )}
 
-          <div
-            className={`transition-all duration-300 ${
-              activeTab === 'menu' ? 'opacity-100' : 'pointer-events-none hidden opacity-0 md:block'
-            }`}
-          >
-            <div className="mb-5 flex items-end justify-between gap-3 md:mb-6">
-              <h2 className="font-display text-2xl font-bold text-slate-100 sm:text-3xl">Chef Specials</h2>
-              <p className="text-sm text-slate-400">{filteredMenuItems.length} items</p>
-            </div>
+          {popularInsights.topItems.length > 0 && activeTab === 'menu' && (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="font-display text-base font-bold text-[#282C3F]">Popular this week</h3>
+                <span className="text-[11px] font-medium text-[#686B78]">Auto scroll</span>
+              </div>
 
-            <div className="mb-4 rounded-2xl border border-slate-700/80 bg-slate-900/75 p-3 backdrop-blur-md">
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
-                    🔎
-                  </span>
-                  <input
-                    type="text"
-                    value={searchInput}
-                    onChange={(event) => setSearchInput(event.target.value)}
-                    placeholder="Search items or categories"
-                    className="h-10 w-full rounded-lg border border-slate-600/80 bg-slate-800/80 pl-9 pr-9 text-sm text-slate-100 outline-none transition focus:border-brand-500"
-                  />
-                  {searchInput ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSearchInput('')
-                        setSearchQuery('')
-                      }}
-                      className="absolute right-2 top-1/2 h-6 w-6 -translate-y-1/2 rounded-md border border-slate-600/80 bg-slate-900/70 text-xs text-slate-300 transition hover:border-brand-500 hover:text-brand-300"
+              <div
+                ref={featuredScrollRef}
+                className="no-scrollbar flex gap-2.5 overflow-x-auto pb-1"
+              >
+                {popularInsights.topItems.map((item, index) => {
+                  const orderedCount = popularInsights.countById[String(item.id)]
+
+                  return (
+                    <article
+                      key={`featured-${item.id}`}
+                      className="w-48 shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-soft"
                     >
-                      x
-                    </button>
-                  ) : null}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchInput('')
-                    setSearchQuery('')
-                    setSelectedCategory('all')
-                    setSelectedAvailability('all')
-                  }}
-                  className="h-10 rounded-lg border border-slate-600/80 bg-slate-800/80 px-3 text-xs font-bold uppercase tracking-wide text-slate-100 transition hover:border-brand-500 hover:text-brand-300"
-                >
-                  Reset Filters
-                </button>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400">Availability</span>
-                {AVAILABILITY_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => setSelectedAvailability(option.value)}
-                    className={`rounded-md border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide transition-all sm:text-[11px] ${
-                      selectedAvailability === option.value
-                        ? 'border-brand-500/70 bg-brand-500/20 text-brand-300'
-                        : 'border-slate-600/80 bg-slate-900/55 text-slate-300 hover:border-brand-500/40'
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-                <button
-                  type="button"
-                  onClick={() => setSelectedCategory('all')}
-                  className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition-all ${
-                    selectedCategory === 'all'
-                      ? 'border-brand-500/60 bg-brand-500/20 text-brand-300'
-                      : 'border-slate-600/80 bg-slate-800/80 text-slate-300 hover:border-brand-500/40'
-                  }`}
-                >
-                  All
-                </button>
-                {uniqueCategories.map((category) => (
-                  <button
-                    key={category}
-                    type="button"
-                    onClick={() => setSelectedCategory(category)}
-                    className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition-all ${
-                      selectedCategory === category
-                        ? 'border-brand-500/60 bg-brand-500/20 text-brand-300'
-                        : 'border-slate-600/80 bg-slate-800/80 text-slate-300 hover:border-brand-500/40'
-                    }`}
-                  >
-                    {category}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-2 flex min-h-5 items-center justify-between px-1 text-[11px] text-slate-400">
-                <span>{isSearchDebouncing ? 'Searching...' : 'Search synced'}</span>
-                <span className="hidden sm:inline">Share URL to keep current filters</span>
+                      <div className="relative h-24">
+                        <img
+                          src={item.image}
+                          alt={item.name}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                        />
+                        <span className="absolute left-2 top-2 rounded-full bg-[#FC8019] px-2 py-0.5 text-[10px] font-semibold text-white">#{index + 1}</span>
+                      </div>
+                      <div className="space-y-1 p-2.5">
+                        <p className="truncate text-[13px] font-bold text-[#282C3F]">{item.name}</p>
+                        <p className="text-[12px] font-semibold text-[#FC8019]">Rs {item.price}</p>
+                        <p className="text-[11px] text-[#686B78]">{orderedCount ? `${orderedCount} ordered` : 'Recommended'}</p>
+                      </div>
+                    </article>
+                  )
+                })}
               </div>
             </div>
+          )}
 
-            {isLoadingMenu && (
-              <div className="rounded-2xl border border-slate-700/80 bg-slate-900/70 p-5 text-sm text-slate-300">
-                Loading menu...
+          {activeTab === 'menu' && (
+            <section className="space-y-2.5">
+              <div className="flex items-end justify-between">
+                <h3 className="font-display text-[22px] font-bold text-[#282C3F]">Menu</h3>
+                <p className="text-xs text-[#686B78]">{filteredMenuItems.length} items</p>
               </div>
-            )}
 
-            {!isLoadingMenu && menuError && (
-              <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-5 text-sm text-rose-200">
-                {menuError}
-              </div>
-            )}
+              {isLoadingMenu && (
+                <div className="rounded-2xl border border-slate-200 bg-[#F8F8F8] p-5 text-sm text-[#686B78]">
+                  Loading menu...
+                </div>
+              )}
 
-            {!isLoadingMenu && !menuError && menuItems.length === 0 && (
-              <div className="rounded-2xl border border-slate-700/80 bg-slate-900/70 p-5 text-sm text-slate-300">
-                No menu items available for this restaurant.
-              </div>
-            )}
+              {!isLoadingMenu && menuError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
+                  {menuError}
+                </div>
+              )}
 
-            {!isLoadingMenu && !menuError && menuItems.length > 0 && filteredMenuItems.length === 0 && (
-              <div className="rounded-2xl border border-slate-700/80 bg-slate-900/70 p-5 text-sm text-slate-300">
-                No items match your current search or filters.
-              </div>
-            )}
+              {!isLoadingMenu && !menuError && menuItems.length === 0 && (
+                <div className="rounded-2xl border border-slate-200 bg-[#F8F8F8] p-5 text-sm text-[#686B78]">
+                  No menu items available for this restaurant.
+                </div>
+              )}
 
-            {!isLoadingMenu && !menuError && filteredMenuItems.length > 0 && (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:gap-5">
-                {filteredMenuItems.map((item) => (
-                  <div key={item.id} data-menu-card>
+              {!isLoadingMenu && !menuError && menuItems.length > 0 && filteredMenuItems.length === 0 && (
+                <div className="rounded-2xl border border-slate-200 bg-[#F8F8F8] p-5 text-sm text-[#686B78]">
+                  No items match your current search or filters.
+                </div>
+              )}
+
+              {!isLoadingMenu && !menuError && filteredMenuItems.length > 0 && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {filteredMenuItems.map((item) => (
                     <MenuItemCard
+                      key={item.id}
                       item={item}
                       cartQty={cartQtyByItemId[item.id] || 0}
                       onAddToCart={addToCart}
                       onDecreaseQty={decreaseQty}
                     />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {activeTab === 'orders' && (
             <div className="animate-fade-in">
@@ -529,29 +842,19 @@ function App() {
                 onRemoveItem={removeItem}
                 onPlaceOrder={handlePlaceOrder}
                 isPlacingOrder={isPlacingOrder}
+                onBackToMenu={() => setActiveTab('menu')}
               />
             </div>
           )}
         </section>
       </main>
 
-      <div className="hidden md:block">
-        <CartBar
-          cartItems={cartItems}
-          totalItems={totalItems}
-          totalPrice={totalPrice}
-          onAddToCart={addToCart}
-          onDecreaseQty={decreaseQty}
-          onRemoveItem={removeItem}
-          onPlaceOrder={handlePlaceOrder}
-          isPlacingOrder={isPlacingOrder}
-        />
-      </div>
-
-      <MobileBottomNav
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
+      <CartBar
         totalItems={totalItems}
+        totalPrice={totalPrice}
+        onViewCart={() => setActiveTab('orders')}
+        onPlaceOrder={handlePlaceOrder}
+        isPlacingOrder={isPlacingOrder}
       />
     </div>
   )
